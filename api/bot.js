@@ -5,7 +5,7 @@ const bot = new Telegraf(BOT_TOKEN);
 
 // دالة لاختيار نص التذكير بناءً على يوم الأسبوع
 function getReminderText() {
-    const day = new Date().getDay(); // 0 هو يوم الأحد، 5 هو يوم الجمعة
+    const day = new Date().getDay(); // 5 هو يوم الجمعة
     if (day === 5) {
         return 'أفضل الأعمال يوم الجمعة الصلاة على محمد وآل محمد.. هل شاركت اليوم ؟';
     }
@@ -21,9 +21,10 @@ bot.start(async (ctx) => {
 });
 
 bot.on('inline_query', async (ctx) => {
+    // البنية الجديدة للزر: الرمز (y)، ثم العداد الابتدائي (0)، ثم علامة (_) لحفظ الـ IDs لاحقاً
     const keyboard = Markup.inlineKeyboard([
         [
-            Markup.button.callback('نعم', 'y_'), 
+            Markup.button.callback('نعم', 'y_0_'), 
             Markup.button.callback('لا', 'n')
         ]
     ]);
@@ -49,48 +50,54 @@ bot.on('inline_query', async (ctx) => {
     return await ctx.answerInlineQuery(results, { cache_time: 0 });
 });
 
-bot.action(/^y_(.*)$/, async (ctx) => {
+// معالجة ضغط زر نعم بالبنية الجديدة المضمونة
+bot.action(/^y_(\d+)_(.*)$/, async (ctx) => {
     const userId = ctx.from.id.toString();
-    const dataString = ctx.match[1];
+    const currentCount = parseInt(ctx.match[1]); // قراءة العداد مباشرة وبأمان من الزر
+    const dataString = ctx.match[2]; // قراءة قائمة الـ IDs
+    
     let votedUsers = dataString ? dataString.split('.') : [];
 
+    // 1. التحقق من عدم التكرار
     if (votedUsers.includes(userId)) {
         return await ctx.answerCbQuery('لقد قمت بالضغط والمشاركة مسبقاً، بارك الله بك', { show_alert: true });
     }
 
-    if (encodeURIComponent(dataString + '.' + userId).length > 50) {
-        votedUsers = [];
+    // 2. التحقق من مساحة الزر (حدود تليجرام 64 بايت)
+    if (encodeURIComponent(dataString + '.' + userId).length > 40) {
+        votedUsers = []; // تفريغ المعرفات القديمة عند امتلاء المساحة لضمان استمرار العداد
     }
 
     votedUsers.push(userId);
+    const newCount = currentCount + 1;
     const newDataString = votedUsers.join('.');
 
-    // استخراج النص الحالي مع الحفاظ على التذكير اليومي المتغير
-    const lines = ctx.callbackQuery.message.text.split('\n');
-    const reminderText = lines[0]; 
-    const currentCount = parseInt(lines[lines.length - 1].match(/(\d+)/)[1]);
-    const newCount = currentCount + 1;
-
+    // قراءة الاسم الأول لإرسال التنبيه المخصص
     const firstName = ctx.from.first_name;
     await ctx.answerCbQuery(`بارك الله بك يا ${firstName}`, { show_alert: false });
 
+    // تحديث بيانات الزر بالعداد الجديد والقائمة المحدثة
     const updatedKeyboard = Markup.inlineKeyboard([
         [
-            Markup.button.callback('نعم', `y_${newDataString}`),
+            Markup.button.callback('نعم', `y_${newCount}_${newDataString}`),
             Markup.button.callback('لا', 'n')
         ]
     ]);
 
+    // الحصول على نص التذكير الحالي وتحديث العداد بأسفله بأمان
+    const dynamicText = getReminderText();
+
     try {
         await ctx.editMessageText(
-            `${reminderText}\n\nعدد المصلين حتى الآن: ${newCount}`,
+            `${dynamicText}\n\nعدد المصلين حتى الآن: ${newCount}`,
             { reply_markup: updatedKeyboard.reply_markup }
         );
     } catch (error) {
-        console.log('تحديث متزامن');
+        console.log('تحديث متزامن سريع');
     }
 });
 
+// معالجة زر لا
 bot.action('n', async (ctx) => {
     return await ctx.answerCbQuery('شنو تنتظر ما تصلي/ين ؟', { show_alert: true });
 });
