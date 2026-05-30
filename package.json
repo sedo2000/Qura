@@ -1,7 +1,7 @@
 {
-  "name": "telegram-inline-bot",
+  "name": "prayer-tracker-bot",
   "version": "1.0.0",
-  "main": "api/bot.js",
+  "main": "api/webhook.js",
   "dependencies": {
     "telegraf": "^4.16.3"
   }
