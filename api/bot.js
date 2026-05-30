@@ -3,6 +3,15 @@ const { Telegraf, Markup } = require('telegraf');
 const BOT_TOKEN = process.env.BOT_TOKEN;
 const bot = new Telegraf(BOT_TOKEN);
 
+// دالة لاختيار نص التذكير بناءً على يوم الأسبوع
+function getReminderText() {
+    const day = new Date().getDay(); // 0 هو يوم الأحد، 5 هو يوم الجمعة
+    if (day === 5) {
+        return 'أفضل الأعمال يوم الجمعة الصلاة على محمد وآل محمد.. هل شاركت اليوم ؟';
+    }
+    return 'هل صليت على محمد وآل محمد اليوم ؟';
+}
+
 bot.start(async (ctx) => {
     return await ctx.reply(
         'أهلاً بك في بوت التذكير بالصلاة على محمد وآل محمد.\n\n' +
@@ -19,14 +28,16 @@ bot.on('inline_query', async (ctx) => {
         ]
     ]);
 
+    const dynamicText = getReminderText();
+
     const results = [
         {
             type: 'article',
             id: 'shala_reminder',
-            title: 'هل صليت على محمد وآل محمد اليوم ؟',
+            title: 'تذكير الصلاة على محمد وآل محمد',
             description: 'اضغط هنا لمشاركة التذكير في المحادثة',
             input_message_content: {
-                message_text: 'هل صليت على محمد وآل محمد اليوم ؟\n\nعدد المصلين حتى الآن: 0'
+                message_text: `${dynamicText}\n\nعدد المصلين حتى الآن: 0`
             },
             reply_markup: keyboard.reply_markup,
             thumbnail_url: 'https://od.lk/s/M18zMjg3OTA3MzRf/16344%20%281%29.png',
@@ -44,7 +55,7 @@ bot.action(/^y_(.*)$/, async (ctx) => {
     let votedUsers = dataString ? dataString.split('.') : [];
 
     if (votedUsers.includes(userId)) {
-        return await ctx.answerCbQuery('لقد قمت بالضغط والمشاركة مسبقاً، بارك الله بيك/چ', { show_alert: true });
+        return await ctx.answerCbQuery('لقد قمت بالضغط والمشاركة مسبقاً، بارك الله بك', { show_alert: true });
     }
 
     if (encodeURIComponent(dataString + '.' + userId).length > 50) {
@@ -54,15 +65,14 @@ bot.action(/^y_(.*)$/, async (ctx) => {
     votedUsers.push(userId);
     const newDataString = votedUsers.join('.');
 
-    const messageText = ctx.callbackQuery.message ? ctx.callbackQuery.message.text : '';
-    const matchCount = messageText ? messageText.match(/عدد المصلين حتى الآن: (\d+)/) : null;
-    const currentCount = matchCount ? parseInt(matchCount[1]) : 0;
+    // استخراج النص الحالي مع الحفاظ على التذكير اليومي المتغير
+    const lines = ctx.callbackQuery.message.text.split('\n');
+    const reminderText = lines[0]; 
+    const currentCount = parseInt(lines[lines.length - 1].match(/(\d+)/)[1]);
     const newCount = currentCount + 1;
 
-    // قراءة اسم المستخدم وتضمينه في رسالة الشكر
     const firstName = ctx.from.first_name;
-    const greeting = `بارك الله بك يا ${firstName}`;
-    await ctx.answerCbQuery(greeting, { show_alert: false });
+    await ctx.answerCbQuery(`بارك الله بك يا ${firstName}`, { show_alert: false });
 
     const updatedKeyboard = Markup.inlineKeyboard([
         [
@@ -73,7 +83,7 @@ bot.action(/^y_(.*)$/, async (ctx) => {
 
     try {
         await ctx.editMessageText(
-            `هل صليت على محمد وآل محمد اليوم ؟\n\nعدد المصلين حتى الآن: ${newCount}`,
+            `${reminderText}\n\nعدد المصلين حتى الآن: ${newCount}`,
             { reply_markup: updatedKeyboard.reply_markup }
         );
     } catch (error) {
