@@ -12,8 +12,6 @@ bot.start(async (ctx) => {
 });
 
 bot.on('inline_query', async (ctx) => {
-    // الزر يبدأ بقائمة فارغة للمستخدمين الذين ضغطوا نعم
-    // سنخزن الـ IDs مفصولة بنقطة بعد حرف الـ y
     const keyboard = Markup.inlineKeyboard([
         [
             Markup.button.callback('نعم', 'y_'), 
@@ -40,39 +38,32 @@ bot.on('inline_query', async (ctx) => {
     return await ctx.answerInlineQuery(results, { cache_time: 0 });
 });
 
-// معالجة ضغط زر نعم والتحقق من الـ ID لمنع التكرار
 bot.action(/^y_(.*)$/, async (ctx) => {
     const userId = ctx.from.id.toString();
-    const dataString = ctx.match[1]; // سلسلة الـ IDs الحالية المخزنة في الزر
-    
-    // تحويل السلسلة إلى مصفوفة (Array) لمعرفات المستخدمين
+    const dataString = ctx.match[1];
     let votedUsers = dataString ? dataString.split('.') : [];
 
-    // 1. التحقق إذا كان هذا المستخدم قد ضغط على الزر مسبقاً
     if (votedUsers.includes(userId)) {
         return await ctx.answerCbQuery('لقد قمت بالضغط والمشاركة مسبقاً، بارك الله بيك/چ', { show_alert: true });
     }
 
-    // 2. إذا لم يكن قد ضغط، نتحقق من المساحة المتاحة في الزر (حدود تليجرام لبيانات الزر هي 64 بايت)
-    // إذا امتدت القائمة واقتربت من الحد الأقصى، نقوم بتصفير المصفوفة في الخلفية للحفاظ على استمرار العداد دون توقف
     if (encodeURIComponent(dataString + '.' + userId).length > 50) {
-        votedUsers = []; // تفريغ الـ IDs القديمة مع الاحتفاظ بالعدد الكلي في نص الرسالة
+        votedUsers = [];
     }
 
-    // إضافة المستخدم الحالي لقائمة الذين ضغطوا
     votedUsers.push(userId);
     const newDataString = votedUsers.join('.');
 
-    // حساب عدد المصلين الحالي من نص الرسالة وزيادته بـ 1
     const messageText = ctx.callbackQuery.message ? ctx.callbackQuery.message.text : '';
     const matchCount = messageText ? messageText.match(/عدد المصلين حتى الآن: (\d+)/) : null;
     const currentCount = matchCount ? parseInt(matchCount[1]) : 0;
     const newCount = currentCount + 1;
 
-    // إشعار التبريك للمستخدم الجديد
-    await ctx.answerCbQuery('بارك الله بيك/چ', { show_alert: false });
+    // قراءة اسم المستخدم وتضمينه في رسالة الشكر
+    const firstName = ctx.from.first_name;
+    const greeting = `بارك الله بك يا ${firstName}`;
+    await ctx.answerCbQuery(greeting, { show_alert: false });
 
-    // تحديث الأزرار بالقائمة الجديدة
     const updatedKeyboard = Markup.inlineKeyboard([
         [
             Markup.button.callback('نعم', `y_${newDataString}`),
@@ -80,7 +71,6 @@ bot.action(/^y_(.*)$/, async (ctx) => {
         ]
     ]);
 
-    // تعديل الرسالة بالعدد الحقيقي الجديد
     try {
         await ctx.editMessageText(
             `هل صليت على محمد وآل محمد اليوم ؟\n\nعدد المصلين حتى الآن: ${newCount}`,
@@ -91,7 +81,6 @@ bot.action(/^y_(.*)$/, async (ctx) => {
     }
 });
 
-// معالجة زر لا
 bot.action('n', async (ctx) => {
     return await ctx.answerCbQuery('شنو تنتظر ما تصلي/ين ؟', { show_alert: true });
 });
