@@ -1,115 +1,149 @@
 const { Telegraf, Markup } = require('telegraf');
 
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const bot = new Telegraf(BOT_TOKEN);
+const bot = new Telegraf(process.env.BOT_TOKEN);
 
-// دالة لمعرفة النص بناءً على اليوم الحالي لساعة السيرفر
-function getReminderText() {
-    const day = new Date().getDay(); // 5 تعني يوم الجمعة
-    if (day === 5) {
-        return 'أفضل الأعمال يوم الجمعة الصلاة على محمد وآل محمد.. هل شاركت اليوم ؟';
-    }
-    return 'هل صليت على محمد وآل محمد اليوم ؟';
-}
-
-bot.start(async (ctx) => {
-    return await ctx.reply(
-        'أهلاً بك في بوت التذكير بالصلاة على محمد وآل محمد.\n\n' +
-        'لاستخدام البوت في أي محادثة أو مجموعة، فقط اكتب في حقل الكتابة يوزر البوت متبوعاً بمسافة مثل هذا الشكل:\n\n' +
-        `@${ctx.botInfo.username} `
-    );
-});
-
-bot.on('inline_query', async (ctx) => {
-    // البنية الأساسية للزر: الحرف y ثم العداد 0 ثم نقطة لفصل الـ IDs لاحقاً
-    const keyboard = Markup.inlineKeyboard([
-        [
-            Markup.button.callback('نعم', 'y_0_.'), 
-            Markup.button.callback('لا', 'n')
-        ]
-    ]);
-
-    const dynamicText = getReminderText();
-
-    const results = [
-        {
-            type: 'article',
-            id: 'shala_reminder',
-            title: 'تذكير الصلاة على محمد وآل محمد',
-            description: 'اضغط هنا لمشاركة التذكير في المحادثة',
-            input_message_content: {
-                message_text: `${dynamicText}\n\nعدد المصلين حتى الآن: 0`
-            },
-            reply_markup: keyboard.reply_markup,
-            thumbnail_url: 'https://od.lk/s/M18zMjg3OTA3MzRf/16344%20%281%29.png',
-            thumbnail_width: 48,
-            thumbnail_height: 48
-        }
-    ];
-
-    return await ctx.answerInlineQuery(results, { cache_time: 0 });
-});
-
-// معالجة الضغط بنمط ذكي ومستقر ومضمون الحجم
-bot.action(/^y_(\d+)_\.(.*)$/, async (ctx) => {
-    const userId = ctx.from.id.toString();
-    const currentCount = parseInt(ctx.match[1]); // قراءة العداد الحالي مباشرة من الزر
-    const dataString = ctx.match[2];             // قراءة المعرفات المفصولة بنقاط
+// 1️⃣ الميزة الأولى: إرسال كرت الصلاة اليومي مع نظام الستريك (Streak)
+bot.command('prayers', async (ctx) => {
+    // الستريك الابتدائي = 0
+    const initialStreak = 0;
     
-    let votedUsers = dataString ? dataString.split('.') : [];
-
-    // 1. التحقق من منع التكرار للعضو الواحد
-    if (votedUsers.includes(userId)) {
-        return await ctx.answerCbQuery('لقد قمت بالضغط والمشاركة مسبقاً، بارك الله بك', { show_alert: true });
-    }
-
-    // 2. فحص قيد الـ 64 بايت الخاص بتليجرام لحماية البيانات من الفيضان
-    if (encodeURIComponent(dataString + '.' + userId).length > 35) {
-        votedUsers = []; // تصفير قائمة المعرفات القديمة لفسح المجال واستمرار العداد دون توقف
-    }
-
-    votedUsers.push(userId);
-    const newCount = currentCount + 1;
-    const newDataString = votedUsers.join('.');
-
-    // قراءة الاسم وإظهار التنبيه السريع
-    const firstName = ctx.from.first_name || 'العزيز';
-    await ctx.answerCbQuery(`بارك الله بك يا ${firstName}`, { show_alert: false });
-
-    // صناعة الزر المحدث بالبيانات والعداد الجديد
-    const updatedKeyboard = Markup.inlineKeyboard([
-        [
-            Markup.button.callback('نعم', `y_${newCount}_.${newDataString}`),
-            Markup.button.callback('لا', 'n')
-        ]
+    const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('الفجر 🛑', `pray:fajr:${initialStreak}`)],
+        [Markup.button.callback('الظهر 🛑', `pray:dhuhr:${initialStreak}`)],
+        [Markup.button.callback('العصر 🛑', `pray:asr:${initialStreak}`)],
+        [Markup.button.callback('المغرب 🛑', `pray:maghrib:${initialStreak}`)],
+        [Markup.button.callback('العشاء 🛑', `pray:isha:${initialStreak}`)]
     ]);
 
-    const dynamicText = getReminderText();
+    await ctx.reply('جدول الصلوات اليومي ومتابعة الالتزام:\n\nاضغط على الصلاة التي أديتها في وقتها لزيادة الستريك الخاص بك 🔥', keyboard);
+});
 
-    try {
-        await ctx.editMessageText(
-            `${dynamicText}\n\nعدد المصلين حتى الآن: ${newCount}`,
-            { reply_markup: updatedKeyboard.reply_markup }
-        );
-    } catch (error) {
-        console.log('تحديث متزامن حُمي بأمان');
+// معالجة ضغطات أزرار الصلوات والـ Streak
+bot.action(/^pray:(fajr|dhuhr|asr|maghrib|isha):(\d+)$/, async (ctx) => {
+    const prayerName = ctx.match[1];
+    let currentStreak = parseInt(ctx.match[2]);
+    
+    // زيادة الستريك عند الالتزام بالصلاة
+    currentStreak += 1;
+
+    // إعادة بناء الأزرار وتحديث قيمة الـ Streak في الـ Callback Data للزر القادم
+    const replyMarkup = ctx.callbackQuery.message.reply_markup;
+    
+    // تحديث الزر الذي تم ضغطه فقط وتحويل حالته إلى (تم ✅)
+    const updatedInlineKeyboard = replyMarkup.inline_keyboard.map(row => {
+        return row.map(button => {
+            if (button.callback_data.startsWith(`pray:${prayerName}:`)) {
+                const namesArabic = { fajr: 'الفجر', dhuhr: 'الظهر', asr: 'العصر', maghrib: 'المغرب', isha: 'العشاء' };
+                return {
+                    text: `${namesArabic[prayerName]} ✅ (+${currentStreak} 🔥)`,
+                    callback_data: `pray:${prayerName}:${currentStreak}`
+                };
+            }
+            return button;
+        });
+    });
+
+    await ctx.answerCbQuery(`عاش! تم تسجيل الصلاة وزيادة الستريك إلى ${currentStreak} 🔥`);
+    await ctx.editMessageReplyMarkup({ inline_keyboard: updatedInlineKeyboard });
+});
+
+
+// 2️⃣ الميزة الثانية: عداد الأذكار والتسابيح التراكمية الفورية
+bot.command('dhikr', async (ctx) => {
+    const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('سبحان الله (0)', 'dhikr:subhan:0')],
+        [Markup.button.callback('الحمد لله (0)', 'dhikr:hamd:0')],
+        [Markup.button.callback('الله أكبر (0)', 'dhikr:allah:0')]
+    ]);
+
+    await ctx.reply('مسبحة الأذكار التفاعلية الالكترونية:\n\nاضغط على الذكر لتحديث العداد فوراً حياً من الهاتف', keyboard);
+});
+
+// معالجة ضغطات عداد الأذكار التراكمي
+bot.action(/^dhikr:(subhan|hamd|allah):(\d+)$/, async (ctx) => {
+    const type = ctx.match[1];
+    let count = parseInt(ctx.match[2]);
+    
+    count += 1;
+
+    const names = { subhan: 'سبحان الله', hamd: 'الحمد لله', allah: 'الله أكبر' };
+    
+    // إذا وصل المستخدم للعدد الافتراضي للتسبيح
+    if (count === 33) {
+        await ctx.answerCbQuery(`تقبل الله طاعتك! أكملت 33 مرة من ${names[type]} ✨`, { show_alert: true });
+    } else {
+        await ctx.answerCbQuery(`تم التسبيح: ${count}`);
     }
+
+    const replyMarkup = ctx.callbackQuery.message.reply_markup;
+    const updatedInlineKeyboard = replyMarkup.inline_keyboard.map(row => {
+        return row.map(button => {
+            if (button.callback_data.startsWith(`dhikr:${type}:`)) {
+                return {
+                    text: `${names[type]} (${count})`,
+                    callback_data: `dhikr:${type}:${count}`
+                };
+            }
+            return button;
+        });
+    });
+
+    await ctx.editMessageReplyMarkup({ inline_keyboard: updatedInlineKeyboard });
 });
 
-bot.action('n', async (ctx) => {
-    return await ctx.answerCbQuery('شنو تنتظر ما تصلي/ين ؟', { show_alert: true });
+
+// 3️⃣ الميزة الثالثة: واجهة الإعدادات المصغرة السريعة (تغيير طرق الحساب)
+bot.command('settings', async (ctx) => {
+    const keyboard = Markup.inlineKeyboard([
+        [Markup.button.callback('طريقة الحساب: أم القرى 🕋', 'set:method:um_alqura')],
+        [Markup.button.callback('التنبيهات: تفعيل 🔔', 'set:notif:on')],
+        [Markup.button.callback('إغلاق الإعدادات ❌', 'set:close')]
+    ]);
+
+    await ctx.reply('إعدادات مواقيت الصلاة والاقامة العصرية:', keyboard);
 });
 
+// معالجة أزرار الإعدادات السريعة
+bot.action(/^set:(method|notif):(.+)$/, async (ctx) => {
+    const settingType = ctx.match[1];
+    const value = ctx.match[2];
+
+    let newText = '';
+    let newData = '';
+
+    if (settingType === 'method') {
+        newText = value === 'um_alqura' ? 'طريقة الحساب: المساحة المصرية 🇪🇬' : 'طريقة الحساب: أم القرى 🕋';
+        newData = value === 'um_alqura' ? 'set:method:egypt' : 'set:method:um_alqura';
+    } else if (settingType === 'notif') {
+        newText = value === 'on' ? 'التنبيهات: كتم 🔕' : 'التنبيهات: تفعيل 🔔';
+        newData = value === 'on' ? 'set:notif:off' : 'set:notif:on';
+    }
+
+    const replyMarkup = ctx.callbackQuery.message.reply_markup;
+    const updatedInlineKeyboard = replyMarkup.inline_keyboard.map(row => {
+        return row.map(button => {
+            if (button.callback_data.startsWith(`set:${settingType}:`)) {
+                return { text: newText, callback_data: newData };
+            }
+            return button;
+        });
+    });
+
+    await ctx.answerCbQuery('تم تحديث التفضيلات فوراً');
+    await ctx.editMessageReplyMarkup({ inline_keyboard: updatedInlineKeyboard });
+});
+
+bot.action('set:close', async (ctx) => {
+    await ctx.answerCbQuery();
+    await ctx.deleteMessage();
+});
+
+// تصدير الدالة للعمل كـ Serverless Function على Vercel
 module.exports = async (req, res) => {
-    try {
-        if (req.method === 'POST') {
-            await bot.handleUpdate(req.body);
-            res.status(200).send('OK');
-        } else {
-            res.status(200).send('السيرفر يعمل بنجاح');
-        }
-    } catch (err) {
-        console.error(err);
-        res.status(500).send('حدث خطأ');
+    if (req.method === 'POST') {
+        await bot.handleUpdate(req.body);
+        res.status(200).send('OK');
+    } else {
+        res.status(200).send('البوت يعمل بنجاح كبيئة Serverless!');
     }
 };
