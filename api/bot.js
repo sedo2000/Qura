@@ -1,302 +1,461 @@
-const { Telegraf, Markup } = require('telegraf');
+const { Telegraf } = require("telegraf");
 
-const bot = new Telegraf(process.env.BOT_TOKEN);
+const BOT_TOKEN = process.env.BOT_TOKEN || "YOUR_BOT_TOKEN_HERE";
+const bot = new Telegraf(BOT_TOKEN);
 
-// مصفوفة الأسئلة الثقافية الإسلامية
-const triviaQuestions = [
-    { q: "كم عدد غزوات الرسول التي قاتل فيها بنفسه؟", options: ["9 غزوات", "17 غزوة", "27 غزوة"], ans: 0 },
-    { q: "من هو الصحابي الذي لُقب بأمين هذه الأمة؟", options: ["أبو عبيدة بن الجراح", "عمر بن الخطاب", "علي بن أبي طالب"], ans: 0 },
-    { q: "ما هي أول عاصمة في تاريخ الإسلام؟", options: ["مكة المكرمة", "المدينة المنورة", "الكوفة"], ans: 1 }
-];
+// ─────────────────────────────────────────────
+//  In-memory store (Serverless-safe per instance)
+// ─────────────────────────────────────────────
+const users = {}; // keyed by chat id
 
-// دالة بناء الشاشة الرئيسية للبوت (تشبه واجهة حقيبة المؤمن)
-function getMainMenu(streak = 0, theme = 'classic') {
-    return Markup.inlineKeyboard([
-        [Markup.button.callback('جدول الصلوات والالتزام (الستريك)', `menu:prayers:${streak}:${theme}`)],
-        [Markup.button.callback('المسبحة الإلكترونية التفاعلية', 'menu:dhikr:0')],
-        [Markup.button.callback('مفكرة السنن الرواتب اليومية', 'menu:sunnah')],
-        [Markup.button.callback('حاسبة زكاة المال الفورية', 'menu:zakat:1000')],
-        [Markup.button.callback('صندوق الأسئلة والسيرة النبوية', 'menu:trivia')],
-        [Markup.button.callback('لوحة قياس المزاج والنصح الروحي', 'menu:mood')],
-        [Markup.button.callback('إعدادات ومواقيت الصلاة', 'menu:settings')]
-    ]);
+function getUser(id) {
+  if (!users[id]) {
+    users[id] = {
+      family: {
+        tasks: [
+          { id: "parents_call", label: "الاتصال بالوالدين", done: false },
+          { id: "relatives_visit", label: "زيارة الأقارب", done: false },
+          { id: "friend_check", label: "تفقد صديق", done: false },
+        ],
+        weekStart: weekKey(),
+      },
+      wird: {
+        goal: null,         // 'page' | 'two_pages' | 'half_hizb'
+        streak: 0,
+        lastDone: null,     // YYYY-MM-DD
+        todayDone: false,
+      },
+      detox: {
+        active: false,
+        startedAt: null,
+        completed: 0,
+      },
+    };
+  }
+
+  // Reset family tasks on new week
+  const u = users[id];
+  if (u.family.weekStart !== weekKey()) {
+    u.family.weekStart = weekKey();
+    u.family.tasks.forEach((t) => (t.done = false));
+  }
+
+  // Reset wird on new day
+  if (u.wird.lastDone !== todayKey()) {
+    u.wird.todayDone = false;
+  }
+
+  return u;
 }
 
-// الأمر الرئيسي لتشغيل بوت تذكير
-bot.command('start', async (ctx) => {
-    const welcomeText = "مرحباً بك في بوت تذكير\n\nمساعدك الإسلامي المنظم لجدولة وتتبع العادات العبادية اليومية بأسلوب تفاعلي.";
-    await ctx.reply(welcomeText, getMainMenu());
-});
+function weekKey() {
+  const d = new Date();
+  const jan1 = new Date(d.getFullYear(), 0, 1);
+  const week = Math.ceil(((d - jan1) / 86400000 + jan1.getDay() + 1) / 7);
+  return `${d.getFullYear()}-W${week}`;
+}
 
-// العودة للقائمة الرئيسية من أي مكان
-bot.action(/^main:back:(\d+):(.+)$/, async (ctx) => {
-    const streak = ctx.match[1];
-    const theme = ctx.match[2];
-    await ctx.answerCbQuery();
-    await ctx.editMessageText("بوت تذكير\n\nاختر القسم الذي تريد تصفحه ومتابعته من اللوحة أدناه:", getMainMenu(streak, theme));
-});
+function todayKey() {
+  return new Date().toISOString().slice(0, 10);
+}
 
+// ─────────────────────────────────────────────
+//  KEYBOARDS
+// ─────────────────────────────────────────────
 
-// 1️⃣ قسم جدول الصلوات والستريك
-bot.action(/^menu:prayers:(\d+):(.+)$/, async (ctx) => {
-    const streak = parseInt(ctx.match[1]);
-    const theme = ctx.match[2];
-    
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('الفجر', `pray:fajr:${streak}:${theme}`)],
-        [Markup.button.callback('الظهر', `pray:dhuhr:${streak}:${theme}`)],
-        [Markup.button.callback('العصر', `pray:asr:${streak}:${theme}`)],
-        [Markup.button.callback('المغرب', `pray:maghrib:${streak}:${theme}`)],
-        [Markup.button.callback('العشاء', `pray:isha:${streak}:${theme}`)],
-        [Markup.button.callback('تبديل مظهر الكرت', `theme:toggle:${streak}:${theme}`)],
-        [Markup.button.callback('العودة للقائمة الرئيسية', `main:back:${streak}:${theme}`)]
-    ]);
-
-    await ctx.editMessageText("قسم تتبع الصلوات اليومية:\n\nاضغط على الصلاة التي قمت بأدائها في وقتها لتحديث كرت الالتزام وزيادة الستريك الخاص بك.", keyboard);
-});
-
-bot.action(/^pray:(fajr|dhuhr|asr|maghrib|isha):(\d+):(.+)$/, async (ctx) => {
-    const prayerName = ctx.match[1];
-    let streak = parseInt(ctx.match[2]) + 1;
-    const theme = ctx.match[3];
-    const names = { fajr: 'الفجر', dhuhr: 'الظهر', asr: 'العصر', maghrib: 'المغرب', isha: 'العشاء' };
-
-    const replyMarkup = ctx.callbackQuery.message.reply_markup;
-    const updatedKeyboard = replyMarkup.inline_keyboard.map(row => {
-        return row.map(button => {
-            if (button.callback_data.startsWith(`pray:${prayerName}:`)) {
-                return { text: `${names[prayerName]} (تم +${streak})`, callback_data: `pray:${prayerName}:${streak}:${theme}` };
-            }
-            if (button.callback_data.startsWith('theme:toggle:') || button.callback_data.startsWith('main:back:')) {
-                const parts = button.callback_data.split(':');
-                return { text: button.text, callback_data: `${parts[0]}:${parts[1]}:${streak}:${theme}` };
-            }
-            return button;
-        });
-    });
-
-    await ctx.answerCbQuery(`تم تسجيل صلاة ${names[prayerName]}`);
-    await ctx.editMessageReplyMarkup({ inline_keyboard: updatedKeyboard });
-});
-
-bot.action(/^theme:toggle:(\d+):(.+)$/, async (ctx) => {
-    const streak = ctx.match[1];
-    const currentTheme = ctx.match[2];
-    const nextTheme = currentTheme === 'classic' ? 'neon' : 'classic';
-
-    const replyMarkup = ctx.callbackQuery.message.reply_markup;
-    const updatedKeyboard = replyMarkup.inline_keyboard.map(row => {
-        return row.map(button => {
-            if (button.callback_data.startsWith('theme:toggle:')) {
-                return { text: `تبديل مظهر الكرت (${nextTheme === 'neon' ? 'مودرن' : 'كلاسيك'})`, callback_data: `theme:toggle:${streak}:${nextTheme}` };
-            }
-            if (button.callback_data.startsWith('pray:')) {
-                const parts = button.callback_data.split(':');
-                return { text: button.text, callback_data: `pray:${parts[1]}:${parts[2]}:${nextTheme}` };
-            }
-            if (button.callback_data.startsWith('main:back:')) {
-                return { text: button.text, callback_data: `main:back:${streak}:${nextTheme}` };
-            }
-            return button;
-        });
-    });
-
-    await ctx.answerCbQuery("تم تغيير مظهر كرت الستريك");
-    await ctx.editMessageReplyMarkup({ inline_keyboard: updatedKeyboard });
-});
-
-
-// 2️⃣ قسم المسبحة الإلكترونية التفاعلية
-bot.action(/^menu:dhikr:(\d+)$/, async (ctx) => {
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('سبحان الله (0)', 'dhikr:subhan:0')],
-        [Markup.button.callback('الحمد لله (0)', 'dhikr:hamd:0')],
-        [Markup.button.callback('الله أكبر (0)', 'dhikr:allah:0')],
-        [Markup.button.callback('العودة للقائمة الرئيسية', 'main:back:0:classic')]
-    ]);
-    await ctx.editMessageText("المسبحة الإلكترونية الرقمية:\n\nاضغط على الأذكار لبدء الحساب التراكمي الفوري.", keyboard);
-});
-
-bot.action(/^dhikr:(subhan|hamd|allah):(\d+)$/, async (ctx) => {
-    const type = ctx.match[1];
-    let count = parseInt(ctx.match[2]) + 1;
-    const names = { subhan: 'سبحان الله', hamd: 'الحمد لله', allah: 'الله أكبر' };
-
-    if (count === 33) {
-        await ctx.answerCbQuery(`أكملت 33 مرة من ${names[type]}`, { show_alert: true });
-    } else {
-        await ctx.answerCbQuery(`العداد: ${count}`);
-    }
-
-    const replyMarkup = ctx.callbackQuery.message.reply_markup;
-    const updatedKeyboard = replyMarkup.inline_keyboard.map(row => {
-        return row.map(button => {
-            if (button.callback_data.startsWith(`` + `dhikr:${type}:`)) {
-                return { text: `${names[type]} (${count})`, callback_data: `dhikr:${type}:${count}` };
-            }
-            return button;
-        });
-    });
-    await ctx.editMessageReplyMarkup({ inline_keyboard: updatedKeyboard });
-});
-
-
-// 3️⃣ قسم السنن الرواتب
-bot.action('menu:sunnah', async (ctx) => {
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('قبلية الفجر (ركعتان)', 'sun:fajr')],
-        [Markup.button.callback('قبلية الظهر (4 ركعات)', 'sun:dhuhr_b')],
-        [Markup.button.callback('بعدية الظهر (ركعتان)', 'sun:dhuhr_a')],
-        [Markup.button.callback('بعدية المغرب (ركعتان)', 'sun:maghrib')],
-        [Markup.button.callback('بعدية العشاء (ركعتان)', 'sun:isha')],
-        [Markup.button.callback('العودة للقائمة الرئيسية', 'main:back:0:classic')]
-    ]);
-    await ctx.editMessageText("مفكرة السنن الرواتب والنوافل:\n\nاضغط على السنة التي أديتها لتوثيقها في جدولك اليومي.", keyboard);
-});
-
-bot.action(/^sun:(fajr|dhuhr_b|dhuhr_a|maghrib|isha)$/, async (ctx) => {
-    const type = ctx.match[1];
-    const replyMarkup = ctx.callbackQuery.message.reply_markup;
-    const updatedKeyboard = replyMarkup.inline_keyboard.map(row => {
-        return row.map(button => {
-            if (button.callback_data === `sun:${type}`) {
-                return { text: `${button.text} (تم إنجازها)`, callback_data: 'sun:done' };
-            }
-            return button;
-        });
-    });
-    await ctx.answerCbQuery("تم توثيق السنة الرواتب بنجاح");
-    await ctx.editMessageReplyMarkup({ inline_keyboard: updatedKeyboard });
-});
-
-
-// 4️⃣ قسم حاسبة زكاة المال الواجبة
-bot.action(/^menu:zakat:(\d+)$/, async (ctx) => {
-    const currentMoney = parseInt(ctx.match[1]);
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('+ 1,000', `zk:add:${currentMoney}:1000`), Markup.button.callback('+ 10,000', `zk:add:${currentMoney}:10000`)],
-        [Markup.button.callback('- 1,000', `zk:add:${currentMoney}:-1000`), Markup.button.callback('تصفير الرقم', `zk:add:0:0`)],
-        [Markup.button.callback('احسب مقدار الزكاة الواجبة طردياً', `zk:calc:${currentMoney}`)],
-        [Markup.button.callback('العودة للقائمة الرئيسية', 'main:back:0:classic')]
-    ]);
-    await ctx.editMessageText(`حاسبة الزكاة الرقمية السريعة:\n\nالمبلغ الحالي المراد جرد زكاته: ${currentMoney}`, keyboard);
-});
-
-bot.action(/^zk:add:(\d+):(-?\d+)$/, async (ctx) => {
-    let money = parseInt(ctx.match[1]);
-    const add = parseInt(ctx.match[2]);
-    money = Math.max(0, money + add);
-
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('+ 1,000', `zk:add:${money}:1000`), Markup.button.callback('+ 10,000', `zk:add:${money}:10000`)],
-        [Markup.button.callback('- 1,000', `zk:add:${money}:-1000`), Markup.button.callback('تصفير الرقم', `zk:add:0:0`)],
-        [Markup.button.callback('احسب مقدار الزكاة الواجبة طردياً', `zk:calc:${money}`)],
-        [Markup.button.callback('العودة للقائمة الرئيسية', 'main:back:0:classic')]
-    ]);
-    await ctx.editMessageText(`حاسبة الزكاة الرقمية السريعة:\n\nالمبلغ الحالي المراد جرد زكاته: ${money}`, keyboard);
-});
-
-bot.action(/^zk:calc:(\d+)$/, async (ctx) => {
-    const finalMoney = parseInt(ctx.match[1]);
-    const result = finalMoney * 0.025; // نسبة 2.5% الشرعية
-    await ctx.answerCbQuery(`مقدار الزكاة المستحق إخراجها هو: ${result}`, { show_alert: true });
-});
-
-
-// 5️⃣ قسم الأسئلة والسيرة النبوية
-bot.action('menu:trivia', async (ctx) => {
-    const randomIdx = Math.floor(Math.random() * triviaQuestions.length);
-    const item = triviaQuestions[randomIdx];
-
-    const buttons = item.options.map((opt, idx) => {
-        return [Markup.button.callback(opt, `trv:ans:${randomIdx}:${idx}`)];
-    });
-    buttons.push([Markup.button.callback('العودة للقائمة الرئيسية', 'main:back:0:classic')]);
-
-    await ctx.editMessageText(`قسم الثقافة الإسلامية والسيرة النبوية:\n\n${item.q}`, Markup.inlineKeyboard(buttons));
-});
-
-bot.action(/^trv:ans:(\d+):(\d+)$/, async (ctx) => {
-    const qIdx = parseInt(ctx.match[1]);
-    const uAns = parseInt(ctx.match[2]);
-    const item = triviaQuestions[qIdx];
-
-    if (uAns === item.ans) {
-        await ctx.answerCbQuery('إجابة صحيحة وممتازة تماماً', { show_alert: true });
-    } else {
-        await ctx.answerCbQuery(`إجابة خاطئة، الصحيح هو: ${item.options[item.ans]}`, { show_alert: true });
-    }
-});
-
-
-// 6️⃣ قسم قياس المزاج والنصح الروحي
-bot.action('menu:mood', async (ctx) => {
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('أشعر بضيق أو قلق نفسي', 'mood:get:sad')],
-        [Markup.button.callback('أشعر بالحمد والاستقرار الروحي', 'mood:get:happy')],
-        [Markup.button.callback('أشعر بكسل وخمول عن الطاعات', 'mood:get:lazy')],
-        [Markup.button.callback('العودة للقائمة الرئيسية', 'main:back:0:classic')]
-    ]);
-    await ctx.editMessageText("بوابة قياس الاستقرار الروحي:\n\nكيف تجد حالتك النفسية الآن؟ اختر لتلقي التوجيه المناسب.", keyboard);
-});
-
-bot.action(/^mood:get:(sad|happy|lazy)$/, async (ctx) => {
-    const state = ctx.match[1];
-    let res = '';
-
-    if (state === 'sad') res = 'يقول الله تعالى: "أَلَا بِذِكْرِ اللَّهِ تَطْمَئِنُّ الْقُلُوبُ". ننصحك بقراءة سورة الشرح وتدبر معانيها الآن.';
-    if (state === 'happy') res = 'الحمد لله دائماً! يقول الله: "لَئِن شَكَرْتُمْ لَأَزِيدَنَّكُمْ". حافظ على هذا الشعور بسجدة شكر أو صدقة خفيفة.';
-    if (state === 'lazy') res = 'ردد الآن: "اللهم إني أعوذ بك من الهم والحزن، والعجز والكسل"، وقم بتجديد وضوئك ونشاطك.';
-
-    await ctx.answerCbQuery();
-    await ctx.reply(res);
-});
-
-
-// 7️⃣ قسم الإعدادات العامة للمواقيت
-bot.action('menu:settings', async (ctx) => {
-    const keyboard = Markup.inlineKeyboard([
-        [Markup.button.callback('طريقة الحساب: تقويم أم القرى', 'cfg:method:um')],
-        [Markup.button.callback('التنبيهات الفورية: تفعيل', 'cfg:notif:on')],
-        [Markup.button.callback('العودة للقائمة الرئيسية', 'main:back:0:classic')]
-    ]);
-    await ctx.editMessageText("إعدادات وتخصيص تطبيق تذكير الرقمي:", keyboard);
-});
-
-bot.action(/^cfg:(method|notif):(.+)$/, async (ctx) => {
-    const type = ctx.match[1];
-    const val = ctx.match[2];
-    let nText = '', nData = '';
-
-    if (type === 'method') {
-        nText = val === 'um' ? 'طريقة الحساب: المساحة المصرية' : 'طريقة الحساب: تقويم أم القرى';
-        nData = val === 'um' ? 'cfg:method:eg' : 'cfg:method:um';
-    } else {
-        nText = val === 'on' ? 'التنبيهات الفورية: كتم' : 'التنبيهات الفورية: تفعيل';
-        nData = val === 'on' ? 'cfg:notif:off' : 'cfg:notif:on';
-    }
-
-    const replyMarkup = ctx.callbackQuery.message.reply_markup;
-    const updatedKeyboard = replyMarkup.inline_keyboard.map(row => {
-        return row.map(button => {
-            if (button.callback_data.startsWith(`cfg:${type}:`)) {
-                return { text: nText, callback_data: nData };
-            }
-            return button;
-        });
-    });
-
-    await ctx.answerCbQuery("تم تحديث خيارات التفضيل");
-    await ctx.editMessageReplyMarkup({ inline_keyboard: updatedKeyboard });
-});
-
-
-// تصدير واجهة الويب هوك للرفع المباشر على Vercel
-module.exports = async (req, res) => {
-    if (req.method === 'POST') {
-        await bot.handleUpdate(req.body);
-        res.status(200).send('OK');
-    } else {
-        res.status(200).send('بوت تذكير المنظم يعمل بأعلى كفاءة لبيئة Serverless!');
-    }
+const MAIN_MENU = {
+  inline_keyboard: [
+    [{ text: "مفكرة بر الوالدين وصلة الرحم", callback_data: "menu_family" }],
+    [{ text: "منظم الاوراد وحفظ القرآن", callback_data: "menu_wird" }],
+    [{ text: "مكتبة الحقوق والواجبات الشرعية", callback_data: "menu_rights" }],
+    [{ text: "بوصلة القبلة وتوقيت الصلاة", callback_data: "menu_qibla" }],
+    [{ text: "لوحة تصفية الذهن والتفكر", callback_data: "menu_detox" }],
+  ],
 };
+
+const BACK_BTN = [{ text: "القائمة الرئيسية", callback_data: "main_menu" }];
+
+function familyKeyboard(tasks) {
+  const rows = tasks.map((t) => [
+    {
+      text: t.done ? `${t.label}  -  تمت الصلة` : t.label,
+      callback_data: `family_toggle_${t.id}`,
+    },
+  ]);
+  rows.push(BACK_BTN);
+  return { inline_keyboard: rows };
+}
+
+function wirdGoalKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "صفحة واحدة يومياً", callback_data: "wird_set_page" }],
+      [{ text: "صفحتان يومياً", callback_data: "wird_set_two_pages" }],
+      [{ text: "نصف حزب يومياً", callback_data: "wird_set_half_hizb" }],
+      BACK_BTN,
+    ],
+  };
+}
+
+function wirdDashKeyboard(todayDone) {
+  const rows = [];
+  if (!todayDone) {
+    rows.push([{ text: "تم انجاز الورد", callback_data: "wird_done" }]);
+  }
+  rows.push([{ text: "تغيير المقدار", callback_data: "wird_change" }]);
+  rows.push(BACK_BTN);
+  return { inline_keyboard: rows };
+}
+
+function rightsKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "حقوق الوالدين", callback_data: "rights_parents" }],
+      [{ text: "حقوق الجار", callback_data: "rights_neighbor" }],
+      [{ text: "حقوق الزوج والزوجة", callback_data: "rights_spouse" }],
+      [{ text: "حقوق الاصدقاء والاخوان", callback_data: "rights_friends" }],
+      [{ text: "احكام المعاملات المالية", callback_data: "rights_finance" }],
+      BACK_BTN,
+    ],
+  };
+}
+
+function qiblaKeyboard() {
+  return {
+    inline_keyboard: [
+      [{ text: "ارسال موقعي لحساب القبلة", callback_data: "qibla_request" }],
+      BACK_BTN,
+    ],
+  };
+}
+
+function detoxKeyboard(active, completed) {
+  const rows = [];
+  if (!active) {
+    rows.push([{ text: "ابدأ تحدي 10 دقائق", callback_data: "detox_start" }]);
+  } else {
+    rows.push([{ text: "اكملت التحدي", callback_data: "detox_confirm" }]);
+  }
+  rows.push(BACK_BTN);
+  return { inline_keyboard: rows };
+}
+
+// ─────────────────────────────────────────────
+//  TEXTS
+// ─────────────────────────────────────────────
+
+const RIGHTS_CONTENT = {
+  parents: `حقوق الوالدين
+
+البر واجب وهو الاحسان اليهما بالقول والفعل، وطاعتهما في غير معصية الله.
+ويحرم عقوقهما بالاذى او الاهمال او رفع الصوت عليهما.`,
+
+  neighbor: `حقوق الجار
+
+يجب كف الاذى عنه والاحسان اليه بالسلام والزيارة وتفقد حاله.
+قال النبي صلى الله عليه وسلم: "ما زال جبريل يوصيني بالجار حتى ظننت انه سيورثه".`,
+
+  spouse: `حقوق الزوج والزوجة
+
+للزوجة: النفقة والمعاشرة بالمعروف والمهر وعدم الاضرار.
+للزوج: الطاعة في المعروف والحفاظ على البيت والتعاون على بناء الاسرة.`,
+
+  friends: `حقوق الاصدقاء والاخوان
+
+النصيحة والصدق والوفاء والدعاء لهم في ظهر الغيب.
+ومن حقوقهم: عيادتهم عند المرض وتشييع جنائزهم وتفقد احوالهم.`,
+
+  finance: `احكام المعاملات المالية
+
+يحرم الربا بكل صوره ويحل البيع والشراء بالتراضي.
+يجب اداء الامانات ورد الحقوق لاصحابها، ويحرم الغش والتدليس في البيوع.`,
+};
+
+const WIRD_LABELS = {
+  page: "صفحة واحدة",
+  two_pages: "صفحتان",
+  half_hizb: "نصف حزب",
+};
+
+// ─────────────────────────────────────────────
+//  HELPERS
+// ─────────────────────────────────────────────
+
+function familyProgress(tasks) {
+  const done = tasks.filter((t) => t.done).length;
+  const total = tasks.length;
+  const bar = "█".repeat(done) + "░".repeat(total - done);
+  return `${bar}  ${done}/${total}`;
+}
+
+// Qibla calculation
+function calcQibla(lat, lon) {
+  const KAABA_LAT = 21.4225;
+  const KAABA_LON = 39.8262;
+  const dLon = ((KAABA_LON - lon) * Math.PI) / 180;
+  const lat1 = (lat * Math.PI) / 180;
+  const lat2 = (KAABA_LAT * Math.PI) / 180;
+  const x = Math.sin(dLon) * Math.cos(lat2);
+  const y =
+    Math.cos(lat1) * Math.sin(lat2) -
+    Math.sin(lat1) * Math.cos(lat2) * Math.cos(dLon);
+  let angle = (Math.atan2(x, y) * 180) / Math.PI;
+  if (angle < 0) angle += 360;
+  return Math.round(angle);
+}
+
+function compassDir(angle) {
+  const dirs = ["شمال", "شمال شرق", "شرق", "جنوب شرق", "جنوب", "جنوب غرب", "غرب", "شمال غرب"];
+  return dirs[Math.round(angle / 45) % 8];
+}
+
+// ─────────────────────────────────────────────
+//  /start
+// ─────────────────────────────────────────────
+
+bot.start((ctx) => {
+  ctx.reply(
+    `بسم الله الرحمن الرحيم\n\nمرحباً بك في بوت تذكير\n\nاختر القسم الذي تريد:`,
+    { reply_markup: MAIN_MENU }
+  );
+});
+
+// ─────────────────────────────────────────────
+//  CALLBACK HANDLERS
+// ─────────────────────────────────────────────
+
+bot.action("main_menu", (ctx) => {
+  ctx.editMessageText(
+    `لوحة التحكم الرئيسية\n\nاختر القسم:`,
+    { reply_markup: MAIN_MENU }
+  );
+});
+
+// ── FAMILY ──────────────────────────────────
+
+bot.action("menu_family", (ctx) => {
+  const u = getUser(ctx.chat.id);
+  const done = u.family.tasks.filter((t) => t.done).length;
+  ctx.editMessageText(
+    `مفكرة بر الوالدين وصلة الرحم\n\nالاسبوع الحالي\n${familyProgress(u.family.tasks)}\n\nاضغط على الالتزام بعد ادائه:`,
+    { reply_markup: familyKeyboard(u.family.tasks) }
+  );
+});
+
+bot.action(/^family_toggle_(.+)$/, (ctx) => {
+  const id = ctx.match[1];
+  const u = getUser(ctx.chat.id);
+  const task = u.family.tasks.find((t) => t.id === id);
+  if (task) task.done = !task.done;
+  const done = u.family.tasks.filter((t) => t.done).length;
+  const total = u.family.tasks.length;
+  let status = done === total ? "\n\nاحسنت. اتممت جميع التزامات هذا الاسبوع." : "";
+  ctx.editMessageText(
+    `مفكرة بر الوالدين وصلة الرحم\n\nالاسبوع الحالي\n${familyProgress(u.family.tasks)}${status}\n\nاضغط على الالتزام بعد ادائه:`,
+    { reply_markup: familyKeyboard(u.family.tasks) }
+  );
+});
+
+// ── WIRD ─────────────────────────────────────
+
+bot.action("menu_wird", (ctx) => {
+  const u = getUser(ctx.chat.id);
+  if (!u.wird.goal) {
+    ctx.editMessageText(
+      `منظم الاوراد وحفظ القرآن\n\nحدد مقدار وردك اليومي:`,
+      { reply_markup: wirdGoalKeyboard() }
+    );
+  } else {
+    showWirdDash(ctx, u);
+  }
+});
+
+bot.action("wird_change", (ctx) => {
+  ctx.editMessageText(
+    `منظم الاوراد وحفظ القرآن\n\nحدد مقدار وردك اليومي:`,
+    { reply_markup: wirdGoalKeyboard() }
+  );
+});
+
+bot.action(/^wird_set_(.+)$/, (ctx) => {
+  const goal = ctx.match[1];
+  const u = getUser(ctx.chat.id);
+  u.wird.goal = goal;
+  showWirdDash(ctx, u);
+});
+
+function showWirdDash(ctx, u) {
+  const label = WIRD_LABELS[u.wird.goal] || u.wird.goal;
+  const streakText = u.wird.streak > 0
+    ? `\nايام الاستمرار: ${u.wird.streak} يوم متتالي`
+    : "";
+  const statusText = u.wird.todayDone
+    ? "\nالحالة: تم انجاز ورد اليوم"
+    : "\nالحالة: لم يؤد الورد بعد";
+
+  ctx.editMessageText(
+    `منظم الاوراد وحفظ القرآن\n\nوردك اليومي: ${label}${statusText}${streakText}\n\nكل يوم تقرأ ورد يضاف الى سجل استمرارك:`,
+    { reply_markup: wirdDashKeyboard(u.wird.todayDone) }
+  );
+}
+
+bot.action("wird_done", (ctx) => {
+  const u = getUser(ctx.chat.id);
+  if (!u.wird.todayDone) {
+    const yesterday = new Date();
+    yesterday.setDate(yesterday.getDate() - 1);
+    const yKey = yesterday.toISOString().slice(0, 10);
+    u.wird.streak = u.wird.lastDone === yKey ? u.wird.streak + 1 : 1;
+    u.wird.lastDone = todayKey();
+    u.wird.todayDone = true;
+  }
+  showWirdDash(ctx, u);
+});
+
+// ── RIGHTS ───────────────────────────────────
+
+bot.action("menu_rights", (ctx) => {
+  ctx.editMessageText(
+    `مكتبة الحقوق والواجبات الشرعية\n\naختر الباب:`,
+    { reply_markup: rightsKeyboard() }
+  );
+});
+
+bot.action("rights_parents", (ctx) => {
+  ctx.editMessageText(
+    RIGHTS_CONTENT.parents,
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "رجوع الى المكتبة", callback_data: "menu_rights" }],
+          BACK_BTN,
+        ],
+      },
+    }
+  );
+});
+
+bot.action("rights_neighbor", (ctx) => {
+  ctx.editMessageText(RIGHTS_CONTENT.neighbor, {
+    reply_markup: { inline_keyboard: [[{ text: "رجوع الى المكتبة", callback_data: "menu_rights" }], BACK_BTN] },
+  });
+});
+
+bot.action("rights_spouse", (ctx) => {
+  ctx.editMessageText(RIGHTS_CONTENT.spouse, {
+    reply_markup: { inline_keyboard: [[{ text: "رجوع الى المكتبة", callback_data: "menu_rights" }], BACK_BTN] },
+  });
+});
+
+bot.action("rights_friends", (ctx) => {
+  ctx.editMessageText(RIGHTS_CONTENT.friends, {
+    reply_markup: { inline_keyboard: [[{ text: "رجوع الى المكتبة", callback_data: "menu_rights" }], BACK_BTN] },
+  });
+});
+
+bot.action("rights_finance", (ctx) => {
+  ctx.editMessageText(RIGHTS_CONTENT.finance, {
+    reply_markup: { inline_keyboard: [[{ text: "رجوع الى المكتبة", callback_data: "menu_rights" }], BACK_BTN] },
+  });
+});
+
+// ── QIBLA ─────────────────────────────────────
+
+bot.action("menu_qibla", (ctx) => {
+  ctx.editMessageText(
+    `بوصلة القبلة وتوقيت الصلاة\n\nاضغط الزر ادناه ثم ارسل موقعك من خيار "ارسال الموقع" في تيليغرام:`,
+    { reply_markup: qiblaKeyboard() }
+  );
+});
+
+bot.action("qibla_request", (ctx) => {
+  ctx.answerCbQuery();
+  ctx.reply(
+    `ارسل موقعك الآن باستخدام زر "ارسال الموقع" في تيليغرام.\n\nسيحسب البوت اتجاه القبلة فوراً.`
+  );
+});
+
+bot.on("location", (ctx) => {
+  const { latitude, longitude } = ctx.message.location;
+  const angle = calcQibla(latitude, longitude);
+  const dir = compassDir(angle);
+
+  ctx.reply(
+    `بوصلة القبلة\n\nموقعك: ${latitude.toFixed(4)}, ${longitude.toFixed(4)}\n\nاتجاه القبلة: ${angle} درجة (${dir})\n\nوجه الجانب العلوي من هاتفك نحو ${angle} درجة لمواجهة الكعبة المشرفة.\n\nملاحظة: استخدم بوصلة هاتفك مع هذه الزاوية للدقة التامة.`,
+    {
+      reply_markup: {
+        inline_keyboard: [BACK_BTN],
+      },
+    }
+  );
+});
+
+// ── DETOX ─────────────────────────────────────
+
+const DETOX_REFLECTIONS = [
+  "تأمل خَلق السماوات والارض وما فيهما من عجائب الصنع الالهي.",
+  "تفكر في نعمة الحياة والصحة والعقل، واحمد الله عليها.",
+  "تأمل كيف يُدبر الله امر هذا الكون في كل لحظة دون توقف.",
+  "تفكر في نعمة الاسلام وكيف هداك الله من بين الملايين.",
+  "تأمل في آية الكرسي وعظمة الله الذي لا تاخذه سنة ولا نوم.",
+];
+
+bot.action("menu_detox", (ctx) => {
+  const u = getUser(ctx.chat.id);
+  ctx.editMessageText(
+    `لوحة تصفية الذهن والتفكر\n\nتحديات مكتملة: ${u.detox.completed}\n\nاعط عقلك استراحة من الضوضاء الرقمية. عشر دقائق من الصمت والتفكر تعيد صفاء الذهن.`,
+    { reply_markup: detoxKeyboard(u.detox.active, u.detox.completed) }
+  );
+});
+
+bot.action("detox_start", (ctx) => {
+  const u = getUser(ctx.chat.id);
+  u.detox.active = true;
+  u.detox.startedAt = Date.now();
+
+  const reflection = DETOX_REFLECTIONS[Math.floor(Math.random() * DETOX_REFLECTIONS.length)];
+
+  ctx.editMessageText(
+    `تحدي الصمت والتفكر - 10 دقائق\n\n${reflection}\n\nاغلق هاتفك الآن وتفكر في هذا بعمق.\n\nعد بعد 10 دقائق واضغط "اكملت التحدي".`,
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "اكملت التحدي", callback_data: "detox_confirm" }],
+          BACK_BTN,
+        ],
+      },
+    }
+  );
+});
+
+bot.action("detox_confirm", (ctx) => {
+  const u = getUser(ctx.chat.id);
+  const elapsed = u.detox.startedAt ? (Date.now() - u.detox.startedAt) / 60000 : 10;
+  u.detox.active = false;
+  u.detox.startedAt = null;
+  u.detox.completed += 1;
+
+  const mins = Math.round(elapsed);
+  ctx.editMessageText(
+    `احسنت\n\nاكملت تحدي التفكر (${mins} دقيقة)\n\nمجموع تحدياتك المكتملة: ${u.detox.completed}\n\n"الا بذكر الله تطمئن القلوب"`,
+    {
+      reply_markup: {
+        inline_keyboard: [
+          [{ text: "تحدي جديد", callback_data: "detox_start" }],
+          BACK_BTN,
+        ],
+      },
+    }
+  );
+});
+
+// ─────────────────────────────────────────────
+//  LAUNCH
+// ─────────────────────────────────────────────
+
+bot.launch().then(() => {
+  console.log("Bot tazkeer is running...");
+});
+
+process.once("SIGINT", () => bot.stop("SIGINT"));
+process.once("SIGTERM", () => bot.stop("SIGTERM"));
